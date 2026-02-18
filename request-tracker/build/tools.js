@@ -28,6 +28,30 @@ async function makeRTRequest(endpoint, options = {}) {
         return null;
     }
 }
+async function makeRTBinaryRequest(endpoint) {
+    const url = RT_API_BASE.replace(/\/$/, "") + endpoint;
+    const headers = {
+        Authorization: `token ${RT_TOKEN}`,
+    };
+    const fetchOptions = {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(20000),
+    };
+    try {
+        const response = await fetch(url, fetchOptions);
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`HTTP error! status ${response.status} : ${text || response.statusText}`);
+        }
+        const buffer = await response.arrayBuffer();
+        return Buffer.from(buffer);
+    }
+    catch (e) {
+        console.error("Error making RT binary request: ", e);
+        return null;
+    }
+}
 /**
  * Search for tickets using simple search syntax
  */
@@ -346,4 +370,99 @@ async function getTicketLinks(ticketId) {
         };
     }
 }
-export { searchTickets, getTicket, getTicketHistory, createTicket, updateTicket, addComment, getQueues, getUsers, getTicketLinks, };
+/**
+ * List all attachments for a specific ticket
+ */
+async function getTicketAttachments(ticketId) {
+    try {
+        const data = await makeRTRequest(`/ticket/${ticketId}/attachments`);
+        if (typeof data !== "object" || data === null) {
+            return { error: "Unexpected response format", data };
+        }
+        const items = data.items || [];
+        const attachments = items.map((item) => ({
+            id: item.id,
+            filename: item.FileName,
+            content_type: item.ContentType,
+            size: item.ContentLength,
+            created: item.Created,
+            creator: item.Creator,
+            transaction_id: item.Transaction,
+        }));
+        return {
+            ticket_id: ticketId,
+            total: data.total || 0,
+            count: data.count || 0,
+            attachments,
+        };
+    }
+    catch (error) {
+        return {
+            error: error.message || String(error),
+            ticket_id: ticketId,
+        };
+    }
+}
+/**
+ * Get details about a specific attachment
+ */
+async function getAttachmentDetails(ticketId, attachmentId) {
+    try {
+        const data = await makeRTRequest(`/ticket/${ticketId}/attachments/${attachmentId}`);
+        if (typeof data !== "object" || data === null) {
+            return { error: "Unexpected response format", data };
+        }
+        return {
+            id: data.id,
+            filename: data.FileName,
+            content_type: data.ContentType,
+            size: data.ContentLength,
+            encoding: data.Encoding,
+            created: data.Created,
+            creator: data.Creator,
+            headers: data.Headers || {},
+            content: data.Content,
+            transaction_id: data.Transaction,
+        };
+    }
+    catch (error) {
+        return {
+            error: error.message || String(error),
+            ticket_id: ticketId,
+            attachment_id: attachmentId,
+        };
+    }
+}
+/**
+ * Download attachment content as base64
+ */
+async function downloadAttachment(ticketId, attachmentId) {
+    try {
+        const buffer = await makeRTBinaryRequest(`/ticket/${ticketId}/attachments/${attachmentId}/content`);
+        if (!buffer) {
+            return {
+                error: "Failed to download attachment",
+                ticket_id: ticketId,
+                attachment_id: attachmentId,
+            };
+        }
+        // Get metadata first
+        const metadata = await getAttachmentDetails(ticketId, attachmentId);
+        return {
+            ticket_id: ticketId,
+            attachment_id: attachmentId,
+            filename: metadata.filename,
+            content_type: metadata.content_type,
+            size: buffer.length,
+            content_base64: buffer.toString("base64"),
+        };
+    }
+    catch (error) {
+        return {
+            error: error.message || String(error),
+            ticket_id: ticketId,
+            attachment_id: attachmentId,
+        };
+    }
+}
+export { searchTickets, getTicket, getTicketHistory, createTicket, updateTicket, addComment, getQueues, getUsers, getTicketLinks, getTicketAttachments, getAttachmentDetails, downloadAttachment, };
